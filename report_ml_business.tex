@@ -1,0 +1,294 @@
+% Course Project — Machine Learning for Business
+% Referable Glaucoma Detection from Fundus Images
+% Vincent Le Duigou
+
+\documentclass[11pt,a4paper]{article}
+\usepackage[utf8]{inputenc}
+\usepackage[T1]{fontenc}
+\usepackage{amsmath,amssymb}
+\usepackage{graphicx}
+\usepackage{booktabs}
+\usepackage{hyperref}
+\usepackage{geometry}
+\geometry{margin=2.5cm}
+
+\title{\textbf{Referable Glaucoma Detection from Fundus Images}\\[0.4em]
+\large A Classical Machine Learning Pipeline for Triage Support}
+\author{Vincent Le Duigou\\[0.5em]
+\small This project was carried out with the assistance of an AI coding assistant (Cursor/Codex) for implementation, debugging, and report structuring.}
+\date{February 2026}
+
+\begin{document}
+
+\maketitle
+
+\begin{abstract}
+We address the business and clinical problem of screening for \emph{referable glaucoma} (RG) from colour fundus photographs, using \emph{classical} machine learning only (no deep learning). The goal is to build an interpretable, reproducible pipeline that can serve as a baseline and triage tool, while respecting strict scope and compute constraints. We use the AIROGS challenge dataset (subset of folder 0, $\sim$18k images), design a full pipeline from data loading to feature extraction (simple, HOG, LBP, Haralick, combined, and ``full'' descriptors), preprocessing (CLAHE, circular mask), resampling (SMOTE), and classification (Random Forest, Logistic Regression, XGBoost). We evaluate with AUC-ROC, partial AUC (90--100\% specificity), and sensitivity at 95\% specificity, with bootstrap confidence intervals. Our best configuration reaches an AUC of $\sim$0.70 on a held-out test set and sensitivity at 95\% specificity of $\sim$22\%, demonstrating a non-trivial signal under strong class imbalance ($\sim$3\% RG). We discuss business relevance, limitations, deployment considerations, and the questions we asked during the project (including the choice of classical ML vs.\ deep learning, and whether alternative technologies such as Rust could alleviate performance bottlenecks).
+\end{abstract}
+
+\tableofcontents
+\newpage
+
+%=============================================================================
+\section{Introduction and Business Context}
+%=============================================================================
+
+\subsection{Business Problem}
+
+Glaucoma is a leading cause of irreversible blindness worldwide. It is often asymptomatic until a late stage, so early detection during routine eye examinations is critical. Screening programmes that rely solely on ophthalmologists are not scalable given the global shortage of specialists. The \textbf{business and clinical need} is therefore to support triage: automatically flag patients at higher risk of referable glaucoma (RG) from fundus images, with high specificity to avoid overwhelming clinics with false positives, while maintaining acceptable sensitivity.
+
+We formulate the problem as a \emph{binary classification} task: for each fundus image, predict whether the case is \emph{referable glaucoma} (RG) or \emph{non-referable glaucoma} (NRG). Success is measured not only by overall accuracy or AUC, but by metrics aligned with the AIROGS challenge and clinical practice: \textbf{partial AUC} in the high-specificity region (90--100\%) and \textbf{sensitivity at 95\% specificity} (SE@95SP).
+
+\subsection{Scope and Constraints}
+
+We deliberately restrict this project to \textbf{classical machine learning}:
+\begin{itemize}
+  \item No deep learning (no CNNs, no Vision Transformers), regardless of potential performance gains.
+  \item Use of interpretable, hand-crafted or classical descriptors (colour histograms, HOG, LBP, Haralick, Gabor, etc.) and standard classifiers (Random Forest, Logistic Regression, XGBoost).
+  \item Training and validation on a single data folder (folder 0) for reproducibility and manageable compute; other folders (e.g., folder 1) are used for generalisation assessment.
+\end{itemize}
+
+This scope is documented in project files (\texttt{PLAN\_PROJET.md}, \texttt{SCOPE\_ML.md}) and enforced so that the deliverable is a clear baseline for future comparison with deep learning and to keep the narrative and code understandable for a business-oriented audience.
+
+\subsection{Project Narrative and Workflow}
+
+The work followed a structured narrative:
+\begin{enumerate}
+  \item \textbf{Exploratory data analysis (EDA)}: understand the dataset, class imbalance, and image variability.
+  \item \textbf{Baseline}: simple colour features + Random Forest / Logistic Regression on folder 0.
+  \item \textbf{Cross-folder evaluation}: test the baseline on folder 1 to assess generalisation.
+  \item \textbf{Feature and model lab}: compare feature families (simple, HOG, LBP, Haralick, combined) and resampling (SMOTE) on a reduced subset.
+  \item \textbf{Full pipeline}: preprocessing (CLAHE, mask), ``full'' features (colour spaces, Gabor, LBP multi-scale, Haralick, spatial proxies), feature selection, XGBoost tuning, optional stacking, and final evaluation with confidence intervals.
+\end{enumerate}
+
+Each step is implemented in dedicated Jupyter notebooks (\texttt{01\_eda}, \texttt{03\_training\_ml}, \texttt{04\_eval\_dossier\_1}, \texttt{05\_pipelines\_features\_ml}, \texttt{07\_full\_pipeline}) and supported by modular Python code in \texttt{src/}.
+
+%=============================================================================
+\section{Data: Description and Justification}
+%=============================================================================
+
+\subsection{Source: AIROGS Challenge}
+
+The dataset comes from the \textbf{AIROGS} challenge (Artificial Intelligence for RObust Glaucoma Screening), designed for referable glaucoma detection from colour fundus photographs (CFP).
+
+\begin{itemize}
+  \item \textbf{Labels}: \texttt{train\_labels.csv} at the project root; columns \texttt{challenge\_id} and \texttt{class} (NRG or RG). The full challenge has $\sim$101k labelled rows.
+  \item \textbf{Images}: stored in six folders \texttt{0/}--\texttt{5/}, one JPEG per \texttt{challenge\_id} (e.g.\ \texttt{TRAINXXXXXX.jpg}).
+  \item \textbf{Challenge metrics}: partial AUC, sensitivity at 95\% specificity, and metrics for image ``ungradability''. We focus on the binary RG vs.\ NRG task and on pAUC and SE@95SP.
+\end{itemize}
+
+\subsection{ML Subset (Folder 0 Only)}
+
+For training and reproducibility we use \textbf{only images in folder 0}. The script \texttt{scripts/build\_ml\_subset.py} intersects \texttt{train\_labels.csv} with the list of files in \texttt{0/} and produces \texttt{data/train\_ml\_subset.csv}, containing $\sim$18k rows. Subsequent runs load this CSV (no need to re-list 18k files), which speeds up data loading.
+
+\subsection{Image Characteristics and Preprocessing}
+
+Image resolutions are highly variable (e.g.\ widths 1634--6000, heights 1630--4000 pixels on a 500-image sample). For feature extraction, images are resized to a fixed size (e.g.\ $224\times224$ or $512\times512$ for texture, see \texttt{src/config.py}) so that feature vectors have fixed dimension and compute time is manageable. Format is JPEG; loading uses OpenCV or Pillow as appropriate.
+
+\subsection{Splits and Reproducibility}
+
+Splits are \textbf{stratified} on the class and use a fixed seed (\texttt{RANDOM\_STATE = 42}). Typical sizes:
+\begin{itemize}
+  \item Full subset: Train 12,600 / Validation 2,700 / Test 2,700.
+  \item ``Fast'' pipeline (notebook 07): Train 3,500 / Val 750 / Test 750.
+\end{itemize}
+
+\subsection{Class Imbalance}
+
+The training set has approximately \textbf{96.65\% NRG} and \textbf{3.35\% RG}. This strong imbalance is typical of screening settings and drives our choice of metrics (pAUC, SE@95SP), resampling (SMOTE), and class weighting (\texttt{class\_weight='balanced'}, \texttt{scale\_pos\_weight} for XGBoost).
+
+%=============================================================================
+\section{Modelling Approach and Methodological Choices}
+%=============================================================================
+
+\subsection{Feature Engineering}
+
+We implemented and compared several feature families:
+\begin{itemize}
+  \item \textbf{Simple}: RGB histograms and global statistics (102 dimensions).
+  \item \textbf{HOG}: Histogram of Oriented Gradients.
+  \item \textbf{LBP}: Local Binary Patterns (with scikit-image).
+  \item \textbf{Haralick}: texture from Grey-Level Co-occurrence Matrix (GLCM).
+  \item \textbf{Combined}: concatenation of simple + HOG + LBP + Haralick.
+  \item \textbf{Full}: multi-space colour (RGB, HSV, LAB, moments, green channel), Gabor filters, multi-scale LBP, Haralick, and spatial proxies (e.g.\ CDR/ISNT-like) for 548 dimensions.
+\end{itemize}
+
+\subsection{Preprocessing}
+
+Optional ophthalmology-inspired preprocessing (used in the full pipeline):
+\begin{itemize}
+  \item \textbf{CLAHE}: contrast-limited adaptive histogram equalisation.
+  \item \textbf{Circular mask}: focus on the fundus region.
+\end{itemize}
+
+We showed that adding this preprocessing alone improves baseline AUC by about 0.10 (from $\sim$0.60 to $\sim$0.70).
+
+\subsection{Handling Imbalance and Thresholds}
+
+\begin{itemize}
+  \item \textbf{SMOTE}: synthetic oversampling of the minority class (RG) in an imbalanced-learn pipeline (resampler $\to$ scaler $\to$ classifier).
+  \item \textbf{Class weights}: \texttt{class\_weight='balanced'} for RF and Logistic Regression; \texttt{scale\_pos\_weight} for XGBoost when relevant.
+  \item \textbf{Decision threshold}: we compute a threshold to achieve a \emph{target specificity} (e.g.\ 95\%) on the training scores (\texttt{find\_threshold\_for\_specificity}) and apply it at evaluation time, so that reported sensitivity at 95\% specificity is meaningful.
+\end{itemize}
+
+\subsection{Models and Tuning}
+
+\begin{itemize}
+  \item \textbf{Baseline}: Random Forest and Logistic Regression on simple features.
+  \item \textbf{Full pipeline}: Random Forest and XGBoost on full (then selected) features; \textbf{RandomizedSearchCV} for XGBoost (50 iterations, 5-fold CV, AUC-ROC scoring).
+  \item \textbf{Ensemble}: stacking (XGBoost + RF $\to$ Logistic Regression meta-learner); in our runs it did not outperform the best XGBoost alone.
+\end{itemize}
+
+\subsection{Feature Selection}
+
+After extracting 548 ``full'' features we apply a \textbf{FeatureSelector}: variance threshold (remove near-constant features) then mutual information to keep the top 150. This slightly reduces AUC (e.g.\ 0.74 $\to$ 0.72 in CV) but yields a compact 150-dimensional representation.
+
+\subsection{Evaluation Methodology}
+
+\begin{itemize}
+  \item \textbf{Metrics}: AUC-ROC, partial AUC (90--100\% specificity), sensitivity at 95\% and 90\% specificity.
+  \item \textbf{Uncertainty}: 95\% bootstrap confidence intervals on the test set for all metrics.
+  \item \textbf{Cross-validation}: 5-fold (or 3-fold for quick baseline runs) with stratification; we report mean $\pm$ std for AUC across folds where relevant.
+\end{itemize}
+
+%=============================================================================
+\section{Experimental Results and Evaluation}
+%=============================================================================
+
+\subsection{Baseline (Simple Features, Folder 0)}
+
+On the full split (Train 12,600 / Val 2,700 / Test 2,700), with simple 102-D features and Random Forest:
+\begin{itemize}
+  \item Validation: AUC-ROC 0.6598; pAUC 0.5141; sensitivity at 95\% specificity 0.0714.
+  \item Test: AUC-ROC 0.6798; pAUC 0.5501; sensitivity at 95\% specificity 0.1613.
+\end{itemize}
+
+The confusion matrix on test is heavily skewed toward predicting NRG (e.g.\ 969 TN, 0 FP, 31 FN, 0 TP at the chosen threshold), indicating that the baseline has a useful ranking (AUC $>$ 0.5) but poor sensitivity at high specificity.
+
+\subsection{Generalisation to Folder 1}
+
+Evaluating the same baseline model (trained on folder 0) on folder 1 (2,000 images, 102-D simple features):
+\begin{itemize}
+  \item AUC-ROC 0.7365; pAUC 0.5638; sensitivity at 95\% specificity 0.2167.
+\end{itemize}
+
+AUC is slightly higher on folder 1, suggesting that the learned signal transfers across folders; however, binary decisions at the fixed threshold still show very low sensitivity in practice.
+
+\subsection{Feature Comparison (Notebook 05, Reduced Subset)}
+
+On a smaller subset (e.g.\ 3k train / 800 val), we compared feature types (simple, HOG, LBP, Haralick, combined). Best AUC and sensitivity at 95\% specificity were achieved with \textbf{combined} features (AUC $\approx$ 0.69, Sens@95 $\approx$ 0.21). HOG alone was uninformative (AUC $\approx$ 0.50); LBP and Haralick added useful texture information.
+
+\subsection{Full Pipeline: Incremental Gains (Notebook 07)}
+
+Table~\ref{tab:progression} summarises the progression (CV means, subset of folder 0).
+
+\begin{table}[h]
+\centering
+\caption{Incremental pipeline performance (CV AUC-ROC, folder 0 subset).}
+\label{tab:progression}
+\begin{tabular}{llc}
+\toprule
+Configuration & Features & AUC-ROC (CV) \\
+\midrule
+Baseline (RF + simple) & 102 & $0.596 \pm 0.034$ \\
++ Preprocessing (CLAHE, mask) & 102 & $0.698 \pm 0.031$ \\
++ Full features & 548 & $0.743 \pm 0.019$ \\
++ Feature selection & 150 & $0.717 \pm 0.039$ \\
++ XGBoost tuned & 150 & $0.741 \pm 0.026$ \\
++ Stacking (XGB+RF$\to$LR) & 150 & $0.731 \pm 0.039$ \\
+\bottomrule
+\end{tabular}
+\end{table}
+
+Preprocessing and rich features yield the largest gains; feature selection trades a small AUC drop for a much smaller feature set.
+
+\subsection{Final Test-Set Results (Best Pipeline)}
+
+On an independent test set (750 images, folder 0), with the best pipeline (XGBoost tuned, 150 selected features, SMOTE, preprocessing):
+
+\begin{itemize}
+  \item \textbf{Confusion matrix}: 719 TN, 13 FP, 16 FN, 2 TP.
+  \item \textbf{AUC-ROC}: 0.6957.
+  \item \textbf{pAUC (90--100\% spec.)}: 0.5890.
+  \item \textbf{Sensitivity at 95\% specificity}: 0.2222.
+  \item \textbf{Sensitivity at 90\% specificity}: 0.4444.
+\end{itemize}
+
+Bootstrap 95\% confidence intervals (e.g.\ AUC-ROC [0.545, 0.848], Sens@95\% [0.05, 0.50]) reflect moderate sample size but confirm performance above chance.
+
+\subsection{Interpretation}
+
+The model captures a \emph{non-trivial signal} for referable glaucoma using only classical ML and interpretable features. Sensitivity at 95\% specificity ($\sim$22\%) is insufficient for a standalone clinical triage tool but is a reasonable baseline and justifies moving to deep learning in a later phase for higher sensitivity.
+
+%=============================================================================
+\section{Questions Raised and Design Choices}
+%=============================================================================
+
+During the project we explicitly addressed several questions that shaped the methodology and the report.
+
+\subsection{Classical ML vs.\ Deep Learning}
+
+We asked whether we should use deep learning to improve performance. The constraint was to deliver a \emph{classical} ML pipeline first: interpretable features, no black-box neural networks. This choice is documented (e.g.\ \texttt{SCOPE\_ML.md}) and enforced so that the project is self-contained and provides a clear baseline for future comparison. The literature from the AIROGS challenge (e.g.\ Khader et al., Wang et al.) describes only deep learning methods (YOLO, EfficientNet, ViT, ResNet); our work fills a gap by showing what is achievable with classical ML on the same data.
+
+\subsection{Data Volume: 18k vs.\ 101k Images}
+
+We discussed whether the subset of $\sim$18k images (folder 0) was sufficient or whether the full $\sim$101k labels would be necessary for a ``professional'' solution. We concluded that for this phase, folder 0 is sufficient to build a reproducible pipeline and to demonstrate the impact of preprocessing and feature design; the full dataset could be used in a later phase (e.g.\ with deep learning) for higher statistical power and robustness.
+
+\subsection{Performance and Technology: Could Rust Help?}
+
+Given slow notebook execution (long imports, heavy cross-validation), we asked whether using \textbf{Rust} (known for efficient data loading and numerical pipelines) could solve our performance problems. After analysis, the main bottlenecks were identified as:
+\begin{itemize}
+  \item \textbf{Heavy Python/NumPy/sklearn imports} at notebook startup (several minutes).
+  \item \textbf{Kernel and memory pressure} when loading large libraries and running CV on large arrays, rather than raw I/O or image decoding speed.
+\end{itemize}
+
+Rust could improve I/O and perhaps feature extraction if we rewrote those parts, but the dominant cost was in the Python scientific stack (sklearn, scipy) and in the Jupyter kernel. We therefore focused on \textbf{lazy imports} (defer loading scikit-image, imbalanced-learn, xgboost until first use), \textbf{disk caching} of feature matrices, and \textbf{explicit subsampling} (e.g.\ \texttt{MAX\_BASELINE}, \texttt{MAX\_CV\_SAMPLES}) to keep runtimes acceptable on a laptop. This is documented in the report and in the code.
+
+\subsection{Environment and Reproducibility}
+
+We encountered multiple Python environments (Anaconda, project \texttt{.venv}), leading to ``module not found'' or wrong-package errors (e.g.\ \texttt{scikit-image} required for LBP). We resolved this by clearly specifying the kernel (project \texttt{.venv}) in VS Code/Cursor and installing all dependencies in that environment. We also preferred running notebooks inside the editor rather than via Jupyter in the browser (which had localhost/500 and library loading issues on the machine used). These choices are reflected in the README and in the report so that an instructor can reproduce the results with a single, well-defined environment.
+
+\subsection{Scope and Narrative}
+
+We defined a clear \textbf{narrative}: EDA $\to$ baseline $\to$ cross-folder evaluation $\to$ feature lab $\to$ full pipeline. This structure is reflected in the notebooks and in this report, so that the project tells a coherent story from problem formulation to results and limitations.
+
+%=============================================================================
+\section{Limitations, Business Implications, and Deployment}
+%=============================================================================
+
+\subsection{Limitations}
+
+\begin{itemize}
+  \item \textbf{Performance}: Sensitivity at 95\% specificity ($\sim$22\%) is too low for standalone clinical triage; many referable cases would be missed.
+  \item \textbf{Data}: Only folder 0 was used for training; the model may not capture all variability present in other acquisition sites or folders.
+  \item \textbf{Metrics}: Sensitivity at 95\% specificity is unstable in small folds (e.g.\ NaN in some CV folds) due to very few RG samples per fold; we rely on test-set metrics and bootstrap intervals for reporting.
+  \item \textbf{Technical debt}: The \texttt{FeatureSelector} object is not serialisable (pickle) due to internal lambdas; we save only the trained classifier and scaler for deployment, not the selector. For full reproducibility of the exact feature set, the selected column indices could be saved separately.
+\end{itemize}
+
+\subsection{Business Impact and Usefulness}
+
+\begin{itemize}
+  \item The pipeline demonstrates that \textbf{classical ML can extract a measurable signal} for referable glaucoma from fundus images, without deep learning. This supports the case for a phased approach: a simple, interpretable baseline first, then more complex models if needed.
+  \item The \textbf{actionability} of the current model is limited to a \emph{pre-screening or prioritisation} role (e.g.\ ranking patients by risk) rather than autonomous referral. Predictions and scores can be combined with other clinical information.
+  \item \textbf{ROI}: Reducing unnecessary specialist reviews (high specificity) while catching more true cases (improving sensitivity in a future phase) aligns with cost and capacity constraints in eye care. Our metrics (pAUC, SE@95SP) are chosen to reflect this trade-off.
+\end{itemize}
+
+\subsection{Deployment Considerations}
+
+\begin{itemize}
+  \item \textbf{Environment}: Deployment would require a single, pinned Python environment (e.g.\ \texttt{requirements.txt} or \texttt{environment.yml}) with the same libraries (scikit-learn, scikit-image, imbalanced-learn, xgboost, OpenCV/Pillow). The project provides this.
+  \item \textbf{Latency}: Feature extraction (especially ``full'' 548-D) takes on the order of minutes for thousands of images on a single machine; for real-time or high-throughput use, caching and/or parallelisation or a lighter feature set would be needed.
+  \item \textbf{Governance}: Classical ML offers interpretability (which features matter, which images get high scores), which can help with validation and regulatory discussions compared to black-box deep learning.
+\end{itemize}
+
+%=============================================================================
+\section{Conclusion}
+%=============================================================================
+
+We built a complete \textbf{classical} machine learning pipeline for referable glaucoma detection from fundus images, using the AIROGS dataset (folder 0, $\sim$18k images). The pipeline includes structured data loading, multiple feature families (simple, HOG, LBP, Haralick, combined, full), ophthalmology-inspired preprocessing (CLAHE, circular mask), handling of class imbalance (SMOTE, class weights), and standard classifiers (RF, LR, XGBoost) with hyperparameter tuning and optional stacking. Evaluation follows the AIROGS-inspired metrics (AUC-ROC, pAUC, sensitivity at 95\% specificity) with bootstrap confidence intervals.
+
+We showed that preprocessing and rich features substantially improve AUC (from $\sim$0.60 to $\sim$0.74 in cross-validation), and that the best pipeline reaches an AUC of $\sim$0.70 and sensitivity at 95\% specificity of $\sim$22\% on a held-out test set. These results are insufficient for standalone clinical use but provide a solid, interpretable baseline and a clear narrative for a business-oriented audience. The project also documents the questions we asked (scope, data volume, role of alternative technologies like Rust, environment and reproducibility) and the design choices that followed.
+
+This work was carried out by \textbf{Vincent Le Duigou} with the assistance of an AI coding assistant (Cursor/Codex) for implementation, debugging, and the structuring of the code and report.
+
+\end{document}

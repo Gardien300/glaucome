@@ -1,0 +1,19 @@
+# Cibles produit — dépistage glaucome référable (commercialisable, efficace patient)
+# Utilisées pour vérifier si un run atteint les objectifs minimaux (voir PRODUCT_VISION.md).
+
+# Seuils minimaux sur eval ET holdout pour considérer le modèle "prêt produit"
+metrics:
+  auc_roc:
+    min: 0.90
+    ideal: 0.93
+  pauc_90_100:
+    min: 0.80
+    ideal: 0.85
+  sens_at_95spec:
+    min: 0.75
+    ideal: 0.80
+
+# À atteindre sur les deux jeux (eval + holdout) pour prétendre au déploiement clinique
+apply_on:
+  - eval
+  - holdout

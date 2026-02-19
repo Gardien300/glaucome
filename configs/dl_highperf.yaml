@@ -1,0 +1,27 @@
+# Config "haute performance" : prix d'entraînement non limitant, objectif perf max.
+# Données actuelles (~46k train) sont suffisantes pour ce type de modèle.
+# À lancer sur GPU (RunPod A40 / 4090 recommandé).
+
+model:
+  backbone: efficientnet_v2_m
+  pretrained: true
+  freeze_backbone: false
+
+data:
+  image_size: 384
+
+train:
+  batch_size: 24
+  num_workers: 4
+  num_epochs: 40
+  lr: 8.0e-5
+  weight_decay: 1.0e-4
+  pos_weight: "auto"
+  patience: 7
+  scheduler:
+    type: cosine
+    T_max: 40
+    eta_min: 1.0e-6
+
+calibration:
+  enabled: true

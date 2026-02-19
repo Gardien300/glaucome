@@ -1,0 +1,523 @@
+## Contexte et objectif
+
+Problème médical : détection automatique du glaucome référable (RG) à partir d’images de fond d’œil (dataset AIROGS). En pratique clinique, l’usage visé est un outil d’aide au triage : repérer les patients à risque de glaucome avec une forte spécificité (ne pas générer trop de faux positifs), tout en maintenant une sensibilité raisonnable.
+
+Contraintes du projet :
+- Uniquement du machine learning classique, pas de deep learning (pas de CNN, pas de ViT).
+- Utilisation prioritaire des images du dossier 0 pour l’entraînement, les autres dossiers (ici le dossier 1) servant à tester la généralisation.
+- Notebooks légers, exécutables sur une machine personnelle, et une histoire claire pour une présentation orale.
+
+Objectif final : construire un pipeline ML complet et explicable :
+- données → features explicables → modèles classiques → métriques proches du challenge AIROGS (AUC, pAUC, sensibilité @95 % spécificité, intervalles de confiance),
+- montrer une progression claire des performances en fonction des choix de prétraitement, de features et de modèles.
+
+---
+
+## Données utilisées
+
+### Source : challenge AIROGS
+
+Le projet s’appuie sur le dataset du **challenge AIROGS** (Artificial Intelligence for RObust Glaucoma Screening), conçu pour le dépistage du glaucome référable à partir de photographies du fond d’œil (CFP).
+
+- **Fichier de labels** : `train_labels.csv` à la racine du projet.
+  - Colonnes : `challenge_id` (identifiant de l’image), `class` (NRG ou RG).
+  - Environ **101 000 lignes** (labels pour l’ensemble du challenge).
+- **Images** : réparties dans six dossiers numérotés `0/`, `1/`, …, `5/`, au format `TRAINXXXXXX.jpg` (un fichier par `challenge_id`).
+- **Métriques de référence du challenge** : pAUC (aire partielle ROC), sensibilité à 95 % de spécificité (SE@95SP), et métriques liées à la « non-gradabilité » des images. Nous nous concentrons sur la tâche binaire RG vs NRG et sur les métriques pAUC et sens@95 % spécificité.
+
+### Choix du sous-ensemble ML (dossier 0 uniquement)
+
+Pour des raisons d’entraînement et de reproductibilité en phase ML classique, nous avons décidé de n’utiliser **que les images du dossier 0** pour construire le jeu d’entraînement / validation / test. Les dossiers 1 à 5 servent à l’évaluation de la généralisation (par exemple le notebook 04 évalue sur le dossier 1).
+
+- **Script de construction** : `scripts/build_ml_subset.py`.
+  - Il croise les labels de `train_labels.csv` avec les fichiers présents dans le dossier `0/`.
+  - Il produit le fichier **`data/train_ml_subset.csv`**, qui contient uniquement les lignes pour lesquelles une image existe dans `0/`.
+- **Taille du sous-ensemble** : environ **18 000 lignes** (18 000 images dans le dossier 0 pour cette phase).
+- **Réutilisation** : une fois `data/train_ml_subset.csv` créé, le chargement des données dans les notebooks se fait par simple lecture de ce CSV (sans relister les 18k fichiers), ce qui accélère les runs suivants.
+
+### Caractéristiques des images
+
+- **Résolutions** : très variables. Sur un échantillon de 500 images (01_eda), les largeurs observées vont d’environ 1 634 à 6 000 pixels et les hauteurs de 1 630 à 4 000 pixels. Les images ne sont donc pas de taille fixe à l’origine.
+- **Redimensionnement** : pour l’extraction de features, les images sont redimensionnées de manière uniforme (paramètres dans `src/config.py`) : par exemple 224×224 pour la plupart des descripteurs, et éventuellement 512×512 pour certaines textures. Cela garantit des vecteurs de features de taille fixe et un temps de calcul maîtrisé.
+- **Format** : JPEG, chargement via OpenCV ou Pillow selon les modules.
+
+### Splits utilisés dans les notebooks
+
+- **Notebooks 01, 03, 04** (et chargement “complet” dans 07 si on ne sous-échantillonne pas) :
+  - Train : 12 600
+  - Validation : 2 700
+  - Test : 2 700
+- **Notebook 07 (version “baseline rapide”)** : sous-échantillon explicite pour limiter le temps d’exécution :
+  - Train : 3 500, Val : 750, Test : 750
+- Les splits sont stratifiés sur la classe (NRG/RG) et utilisent une graine fixe (`RANDOM_STATE = 42`) pour la reproductibilité.
+
+---
+
+## Déséquilibre des classes et exploration
+
+### Déséquilibre des classes
+
+Dans 01_eda.ipynb, nous analysons la répartition des classes sur le train :
+
+- NRG : 96,65 %
+- RG : 3,35 %
+
+Il s’agit d’un fort déséquilibre, typique des problèmes de triage en pratique clinique (peu de vrais glaucomes dans une population générale).
+
+### Exploration visuelle
+
+Toujours dans 01_eda.ipynb :
+
+- Des graphiques d’effectifs et de proportions confirment la rareté des cas RG.
+- Des grilles d’images NRG / RG illustrent :
+  - une forte variabilité de qualité d’image,
+  - des disques optiques parfois peu contrastés,
+  - le fait que la distinction visuelle RG/NRG n’est pas toujours évidente, même pour un œil humain non expert.
+
+---
+
+## Problèmes rencontrés et solutions
+
+Au fil du projet, plusieurs difficultés techniques et méthodologiques sont apparues ; voici les principales et les réponses apportées.
+
+### Environnement et exécution des notebooks
+
+- **Jupyter en localhost** : l’ouverture des notebooks via `jupyter notebook` sur localhost a parfois échoué (erreur 500, ou erreur de chargement de bibliothèque type `libicudata.68.dylib` avec Anaconda). Nous avons privilégié l’exécution directe des notebooks dans **VS Code / Cursor**, avec un noyau Python dédié (environnement du projet), ce qui évite ces problèmes de serveur Jupyter.
+- **Environnements Python multiples** : la coexistence de plusieurs environnements (Anaconda, venv du projet, etc.) a pu faire que certaines dépendances (par ex. `scikit-image`) étaient installées dans un environnement alors que le notebook s’exécutait dans un autre. Les erreurs du type « module non trouvé » ou « scikit-image requis pour LBP » ont été résolues en s’assurant que le noyau utilisé par le notebook pointe bien vers l’environnement où les paquets sont installés (et en installant les paquets dans ce même environnement si besoin).
+- **Tentative d’exécution automatique (nbconvert)** : pour récupérer les sorties sans copier-coller, nous avons essayé d’exécuter le notebook 07 en ligne de commande avec `jupyter nbconvert --execute`. L’opération a échoué à cause d’un problème bas niveau dans l’installation Anaconda (bibliothèque ICU / lxml). Nous n’avons pas poussé la réparation d’Anaconda ; les sorties ont été recueillies manuellement après exécution dans l’éditeur.
+
+### Lenteur et stabilité des notebooks
+
+- **Imports très lents** : la première cellule de certains notebooks (notamment 05 et 07), qui importait d’un coup `sklearn`, `scikit-image`, `imbalanced-learn`, `xgboost`, etc., pouvait prendre plusieurs minutes (5–9 min) et parfois faire planter le noyau. Nous avons introduit des **imports paresseux (lazy imports)** dans les modules `src/feature_extraction.py` et `src/pipeline_ml.py` : les bibliothèques lourdes (scikit-image pour LBP/Haralick, imbalanced-learn pour SMOTE, xgboost) ne sont importées qu’au moment où une fonction en a besoin. Le chargement initial du module devient plus rapide.
+- **Cellules de chargement de données très longues** : l’utilisation de `get_train_val_test_splits()` avec chargement de tout le subset (18k lignes) et éventuellement des imports sklearn dans la même cellule pouvait faire tourner une cellule 15 minutes. Nous avons allégé en : (1) évitant d’importer sklearn dans la cellule de chargement quand ce n’était pas nécessaire ; (2) utilisant un split manuel (pandas) et un **sous-échantillonnage explicite** (ex. `MAX_BASELINE = 5000`) pour la version “rapide” du pipeline 07.
+- **Cross-validation trop longue** : une CV 5-fold sur des dizaines de milliers d’échantillons avec des modèles lourds pouvait dépasser 20 minutes. Nous avons réduit la charge en : limitant le nombre d’échantillons utilisés en CV (ex. `MAX_CV_SAMPLES = 3000`), en réduisant le nombre de folds (CV=3 pour la baseline), et en utilisant des modèles plus légers (ex. RF avec `n_estimators=50`, `max_depth=10`) dans les runs “rapides”.
+
+### Erreurs de code et d’import
+
+- **ValueError "need at least one array to concatenate"** dans `build_feature_matrix` : cela se produisait lorsque toutes les images échouaient silencieusement lors de l’extraction (par ex. à cause d’un `ImportError` non propagé pour scikit-image). Nous avons modifié `feature_extraction.py` pour : (1) propager les `ImportError` au lieu de les avaler ; (2) lever une `ValueError` explicite si aucune feature n’a pu être extraite, avec un message invitant à vérifier les dépendances (scikit-image, etc.).
+- **ImportError scikit-image pour LBP/Haralick** : même avec `pip install scikit-image`, l’erreur pouvait persister si le noyau du notebook utilisait un autre Python. Solution : installer scikit-image dans l’environnement effectivement utilisé par le noyau (ex. `.venv` du projet) et sélectionner ce noyau dans VS Code/Cursor. Nous avons aussi géré la compatibilité entre les anciennes et les nouvelles versions de scikit-image (noms `greycomatrix` vs `graycomatrix`).
+- **NameError dans 07_full_pipeline** : plusieurs cellules utilisaient des fonctions ou constantes non importées : `FeatureSelector`, `tune_model`, `N_TUNING_ITER`, `create_stacking_ensemble`, `fit_scaler`, `find_threshold_for_specificity`, `print_metrics`, `compute_all_metrics_with_ci`, `plot_roc_comparison`, `plot_confusion_matrix`. Nous avons ajouté les imports manquants depuis `src.feature_selection`, `src.tuning`, `src.config`, `src.pipeline_ml` et `src.evaluation_metrics`, et dans une cellule nous avons ajouté `import matplotlib.pyplot as plt` pour l’affichage des courbes ROC.
+- **ImportError MODELS_DIR** dans 03_training_ml : le notebook importait `MODELS_DIR` depuis `src.config`, alors que cette constante n’existait pas encore. Nous avons soit ajouté `MODELS_DIR` dans `config.py`, soit remplacé dans le notebook par un chemin explicite `PROJECT_ROOT / "models"` pour éviter toute dépendance à une constante manquante.
+- **PicklingError lors de la sauvegarde du FeatureSelector** : `joblib.dump(selector, ...)` échouait car le sélecteur contenait des fonctions internes (lambda) non sérialisables par pickle. Nous avons décidé de ne pas sauvegarder le `FeatureSelector` dans le notebook 07 ; seuls le modèle (classifieur) et le scaler sont sauvegardés pour la démo.
+
+### Cohérence données / labels
+
+- Au début du projet, le nombre d’images présentes sur disque (dossier 0) ne correspondait pas au nombre total de lignes de `train_labels.csv` (environ 18k vs 101k). Nous avons formalisé le sous-ensemble ML via `data/train_ml_subset.csv`, qui ne contient que les paires (challenge_id, class) pour lesquelles l’image existe dans le dossier 0. Tous les notebooks de la phase ML s’appuient sur ce fichier (ou sur des dérivés filtrés par dossier), ce qui garantit une cohérence stricte entre images chargées et labels.
+
+---
+
+## Baseline ML simple (03_training_ml.ipynb)
+
+### Features
+
+Nous construisons d’abord une baseline à partir de features simples :
+
+- `feature_type = "simple"` : histogrammes de couleurs (RGB) et statistiques globales sur l’image.
+- Dimension : 102 features par image.
+
+### Modèles
+
+Modèles testés :
+
+- Random Forest,
+- Régression logistique.
+
+Le résumé ci-dessous se concentre sur la Random Forest, représentative du comportement global.
+
+### Split
+
+- Train : 12 600
+- Validation : 2 700
+- Test : 2 700
+
+### Résultats sur la validation
+
+Matrice de confusion (validation) :
+
+[[971   1]
+ [ 28   0]]
+
+Interprétation : le modèle prédit quasiment tout en NRG au seuil choisi.
+
+Métriques :
+
+- AUC‑ROC (val) : 0,6598
+- pAUC (90–100 % spécificité) : 0,5141
+- Sensibilité @ 95 % spécificité : 0,0714
+- Sensibilité @ 90 % spécificité : 0,1786
+
+### Résultats sur le test
+
+Matrice de confusion (test) :
+
+[[969   0]
+ [ 31   0]]
+
+Ici, le modèle ne détecte aucun RG pour le seuil utilisé.
+
+Métriques :
+
+- AUC‑ROC (test) : 0,6798
+- pAUC (90–100 % spécificité) : 0,5501
+- Sensibilité @ 95 % spécificité : 0,1613
+- Sensibilité @ 90 % spécificité : 0,2581
+
+### Conclusion de la baseline
+
+- L’AUC (~0,67–0,68) montre un signal non trivial (meilleur qu’un classifieur aléatoire).
+- En revanche, si l’on fixe une spécificité très élevée (95–90 %), la sensibilité devient très faible, ce qui rend la baseline insuffisante en tant qu’outil de triage clinique.
+- Cette baseline sert de point de départ : elle illustre l’impact du déséquilibre de classes et justifie un travail approfondi sur les features, le prétraitement et le choix des modèles.
+
+---
+
+## Généralisation sur un autre dossier (04_eval_dossier_1.ipynb)
+
+Objectif : vérifier si le modèle entraîné sur le dossier 0 (features simples + RF/logit) se généralise au dossier 1.
+
+### Données
+
+- Jeu d’évaluation : dossier 1.
+- Après extraction de features simples :
+  - Shape : (2000, 102)
+
+### Résultats sur le dossier 1
+
+Matrice de confusion :
+
+[[1940   0]
+ [  60   0]]
+
+Le modèle prédit à nouveau tout en NRG pour le seuil courant, mais l’AUC nous renseigne sur la qualité du classement.
+
+Métriques :
+
+- AUC‑ROC : 0,7365
+- pAUC (90–100 % spécificité) : 0,5638
+- Sensibilité @ 95 % spécificité : 0,2167
+- Sensibilité @ 90 % spécificité : 0,3000
+
+### Interprétation
+
+- L’AUC (~0,74) est même un peu meilleure que sur le dossier 0, ce qui suggère que le modèle capte un signal structurel qui se transfère d’un dossier à l’autre.
+- Néanmoins, en termes de décision binaire au seuil retenu, la sensibilité reste insuffisante : très peu (voire aucun) cas RG sont effectivement détectés.
+- Ce résultat confirme que le modèle a une capacité de ranking, mais que le choix du seuil et la puissance globale restent insuffisants pour un usage clinique robuste.
+
+---
+
+## Laboratoire de features et modèles (05_pipelines_features_ml.ipynb)
+
+Ce notebook sert de “laboratoire” pour comparer rapidement plusieurs familles de features et quelques combinaisons modèle + ré-échantillonnage, sur un sous-ensemble réduit.
+
+### Setup expérimental
+
+- Sous-ensemble :
+  - Train : 3 000
+  - Validation : 800
+- On teste différentes familles de features avec des modèles classiques (RF / régression logistique) et on regarde AUC + sensibilité à 95 % spécificité.
+
+### Comparaison des familles de features
+
+Pour chaque type de feature, on extrait les représentations sur train et validation, puis on entraîne un modèle simple et on évalue.
+
+Résumés des résultats :
+
+| Features    | AUC    | Sens@95 |
+|------------|--------|---------|
+| simple     | 0,5832 | 0,0417  |
+| hog        | 0,4955 | 0,1250  |
+| lbp        | 0,6252 | 0,1250  |
+| haralick   | 0,6007 | 0,2083  |
+| combined   | 0,6925 | 0,2083  |
+
+- `combined` = concaténation de features simples + HOG + LBP + Haralick.
+
+Commentaires :
+
+- Les features simples seules restituent une AUC modeste (~0,58).
+- HOG seul n’apporte pas de gain (AUC ~0,50).
+- LBP et Haralick (texture) améliorent l’AUC (0,60–0,63).
+- La combinaison `combined` est la plus performante en AUC (~0,69) et en sensibilité @95 % (~0,21).
+
+### Essais avec SMOTE
+
+Sur les features simples, après SMOTE (5800 échantillons, RG équilibrés) :
+
+- AUC‑ROC : 0,6131
+- pAUC : 0,4848
+- Sensibilité @ 95 % spécificité : 0,0000
+- Sensibilité @ 90 % spécificité : 0,0833
+
+L’impact de SMOTE est mitigé dans cette configuration : il modifie la distribution d’entraînement, mais n’améliore pas clairement les métriques à haute spécificité sur la validation.
+
+### RF sur features combined
+
+Sur les features combined, un RF donne :
+
+- AUC : 0,6108
+- Sens@95 : 0,0833
+
+Même si ce résultat précis est moins bon que le test simple précédent (peut dépendre des hyperparamètres et du split), les expériences confirment que les features combinées sont les plus riches et constituent un bon candidat pour un pipeline “amélioré”.
+
+### Conclusion du notebook 05
+
+- Les tests montrent que les features de texture (LBP, Haralick) apportent de l’information.
+- Le meilleur compromis, en termes d’AUC et de sensibilité à haute spécificité, est obtenu avec les features combinées.
+- Cette étape de laboratoire guide le design du pipeline complet : on passe ensuite à des features “full” (encore plus riches) et à un tuning de modèle plus sérieux dans 07_full_pipeline.ipynb.
+
+---
+
+## Pipeline complet et amélioration incrémentale (07_full_pipeline.ipynb)
+
+Ce notebook raconte l’histoire complète du pipeline ML classique, en contrôlant la charge de calcul (sous-échantillonnages explicites, CV réduite, caching).
+
+### 1. Baseline rapide sur dossier 0 (sous-échantillon)
+
+Pour limiter le temps de calcul, on travaille d’abord sur un sous-échantillon :
+
+- Train : 3 500 images
+- Validation : 750
+- Test : 750
+- RG dans le train : 120 (3,4 %)
+
+Avec les features simples sans prétraitement :
+
+- 102 features
+- CV 3-fold sur un sous-échantillon de 3 000 :
+  - AUC‑ROC : 0,5960 ± 0,0336
+  - Sens@95 % : instable (NaN, peu de cas RG dans chaque fold)
+
+### 2. Ajout d’un prétraitement ophtalmologique
+
+Nous appliquons un prétraitement inspiré de la littérature ophtalmologique :
+
+- CLAHE (amélioration locale du contraste),
+- Masque circulaire pour se concentrer sur la zone du fond d’œil.
+
+Features : toujours 102 features simples, mais sur les images prétraitées.
+
+Résultat :
+
+- Extraction : ~97 secondes
+- CV 5-fold :
+  - AUC‑ROC : 0,6976 ± 0,0314
+  - Sens@95 % : toujours instable mais globalement meilleure structure ROC.
+
+Gain net : environ +0,10 d’AUC (0,60 → 0,70) grâce au prétraitement seul.
+
+### 3. Features “full” : couleurs + textures + spatial
+
+On construit ensuite un jeu de features “full” comprenant :
+
+- Descripteurs multi-espaces couleur (RGB, HSV, LAB, moments, canaux verts, etc.),
+- Textures LBP multi-échelles,
+- Textures Haralick (GLCM),
+- Filtres de Gabor,
+- Features spatiales autour du disque optique (proxies du CDR, pattern ISNT, etc.).
+
+Résultat :
+
+- Dimension : 548 features.
+- Coût de calcul :
+  - Train 3 500 images : ~5 min 10 s
+  - Test 750 images    : ~1 min 07 s
+  - Total features full : ~6–7 minutes.
+
+Avec un pipeline RF + SMOTE + scaler, en CV 5-fold, on obtient :
+
+- AUC‑ROC : 0,7431 ± 0,0193
+- Sens@95 % : toujours difficile à estimer (NaN), mais la forme de la ROC est significativement meilleure.
+
+Cette étape apporte le plus gros gain de performance par rapport à la baseline simple.
+
+### 4. Sélection de features
+
+Nous ajoutons un sélecteur de features (FeatureSelector) qui combine :
+
+- VarianceThreshold : 548 → 174 features (suppression des dimensions quasi constantes),
+- Mutual Information : 174 → 150 (top 150 features les plus informatives).
+
+Résultat :
+
+- Dimension finale : 150 features.
+- CV 5-fold :
+  - AUC‑ROC : 0,7171 ± 0,0393
+
+On observe une légère perte d’AUC (0,74 → 0,72), mais avec un vecteur de features plus compact. C’est un compromis entre performance et complexité.
+
+### 5. Hyperparameter tuning XGBoost
+
+Nous passons ensuite à un modèle XGBoost, tuné par RandomizedSearchCV :
+
+- 50 itérations,
+- CV 5-fold,
+- Scoring : AUC‑ROC.
+
+Meilleurs hyperparamètres trouvés :
+
+- subsample : 0,6
+- colsample_bytree : 0,6
+- n_estimators : 500
+- max_depth : 3
+- learning_rate : 0,1
+- min_child_weight : 1
+- reg_alpha : 0
+- reg_lambda : 1,0
+- scale_pos_weight : 1
+
+Score CV correspondant :
+
+- Meilleur score CV : 0,7809
+
+Évaluation plus détaillée (toujours en CV 5-fold) :
+
+- AUC‑ROC : 0,7411 ± 0,0264
+
+XGBoost tuné se révèle légèrement supérieur ou comparable au RF sur les features full/filtrées.
+
+### 6. Ensemble stacking (XGB + RF → LR)
+
+Nous testons un ensemble de type stacking :
+
+- Base learners : XGBoost tuné + Random Forest,
+- Métaclassifieur : Régression logistique,
+- Pipeline complet avec SMOTE + StandardScaler.
+
+Résultats en CV 5-fold :
+
+- AUC‑ROC : 0,7305 ± 0,0389
+
+Le stacking n’apporte pas de gain décisif par rapport au meilleur XGBoost seul. Cela montre que, dans ce cadre, la complexité supplémentaire ne se traduit pas par un progrès significatif.
+
+### 7. Synthèse de la progression
+
+Le tableau récapitulatif suivant résume l’impact de chaque brique (les valeurs d’AUC sont des moyennes ± écart-type sur les folds de CV) :
+
+================================================================================
+TABLEAU RÉCAPITULATIF — Progression incrémentale
+================================================================================
+         Configuration      Features       AUC-ROC        Sens@95%sp
+Baseline (RF + simple)          102   0.5960 ± 0.0336       (instable)
+       + Preprocessing          102   0.6976 ± 0.0314       (instable)
+       + Features full          548   0.7431 ± 0.0193       (instable)
+   + Feature selection          150   0.7171 ± 0.0393       (instable)
+        + XGBoost tuné          150   0.7411 ± 0.0264       (instable)
++ Stacking (XGB+RF→LR)          150   0.7305 ± 0.0389       (instable)
+
+Ce tableau illustre l’intérêt d’un travail progressif sur :
+
+- le prétraitement ophtalmologique,
+- la richesse des features (du simple histogramme aux descripteurs full),
+- le tuning des modèles.
+
+### 8. Résultats finaux sur le test set (pipeline optimisé)
+
+Nous évaluons ensuite le meilleur pipeline sur un test set indépendant du dossier 0.
+
+Matrice de confusion finale :
+
+[[719  13]
+ [ 16   2]]
+
+Interprétation :
+
+- Vrais NRG : 719
+- Faux positifs (NRG classés RG) : 13
+- Faux négatifs (RG manqués) : 16
+- Vrais RG : 2
+
+Métriques globales :
+
+- AUC‑ROC : 0,6957
+- pAUC (90–100 % spécificité) : 0,5890
+- Sensibilité @ 95 % spécificité : 0,2222
+- Sensibilité @ 90 % spécificité : 0,4444
+
+Intervalles de confiance (bootstrap 95 %) :
+
+- AUC‑ROC : 0,6957 [0,5453 ; 0,8480]
+- pAUC 90–100 % : 0,5890 [0,5014 ; 0,6917]
+- Sens@95 % : 0,2222 [0,0500 ; 0,5000]
+- Sens@90 % : 0,4444 [0,1426 ; 0,6667]
+
+### Lecture clinique de ces résultats
+
+- À 95 % de spécificité, le modèle détecte environ 22 % des cas RG.
+- À 90 % de spécificité, la sensibilité monte à environ 44 %.
+- Les intervalles de confiance sont larges (test set de taille modérée), mais nettement au-dessus du hasard.
+
+Ces performances sont insuffisantes pour un outil de triage clinique autonome (on laisse encore passer beaucoup de glaucomes), mais elles montrent un signal réel, obtenu **sans deep learning**, uniquement avec des features explicables et des modèles classiques.
+
+---
+
+## Idées et pistes pour pousser le machine learning
+
+Nous avons mis en place un ensemble d’idées et de choix techniques pour tirer le maximum du ML classique dans les contraintes du projet (pas de deep learning, temps de calcul limité, déséquilibre fort).
+
+### Réduction de la charge de calcul et stabilité
+
+- **Sous-échantillonnage explicite** : dans les notebooks “lourds” (05, 07), nous limitons la taille des jeux par des constantes (`MAX_BASELINE`, `MAX_CV_SAMPLES`, `MAX_TRAIN`, `MAX_VAL`). Cela permet d’exécuter tout le pipeline en quelques dizaines de minutes sur un laptop, tout en conservant la possibilité d’augmenter ces seuils pour des runs plus complets.
+- **Imports paresseux (lazy imports)** : dans `src/feature_extraction.py`, les imports de scikit-image (LBP, Haralick) sont faits à l’intérieur des fonctions qui en ont besoin, avec mise en cache des références pour ne pas réimporter à chaque image. Dans `src/pipeline_ml.py`, SMOTE et XGBoost sont chargés de la même manière. L’objectif est de réduire le temps de la première cellule et le risque de crash du noyau au démarrage.
+- **Cache disque des features** : `build_feature_matrix` peut enregistrer les matrices de features (et labels) dans un répertoire de cache (`FEATURE_CACHE_DIR`) avec une clé dérivée des paramètres (type de features, taille, nombre d’échantillons, etc.). Si le cache existe, on recharge les données au lieu de recalculer, ce qui accélère fortement les runs suivants (surtout pour les features “full” ou “combined”).
+- **CV et modèles plus légers en mode “rapide”** : réduction du nombre de folds (CV=3 au lieu de 5), réduction du nombre d’arbres et de la profondeur du RF (`n_estimators=50`, `max_depth=10`) dans les expériences de baseline. Pour un run “final” plus sérieux, on peut remonter ces paramètres.
+
+### Richesse des features et prétraitement
+
+- **Familles de features** : au lieu de rester sur les seuls histogrammes RGB, nous avons implémenté et comparé plusieurs types de descripteurs : **simple** (histogrammes + stats), **HOG**, **LBP**, **Haralick** (GLCM), **combined** (concaténation simple + HOG + LBP + Haralick), et **full** (espaces couleur, Gabor, LBP multi-échelles, Haralick, descripteurs spatiaux type CDR/ISNT). Le notebook 05 permet de comparer ces familles sur un sous-ensemble ; le notebook 07 utilise les features “full” pour le pipeline optimisé.
+- **Prétraitement ophtalmologique** : CLAHE (égalisation locale du contraste) et masque circulaire pour se concentrer sur la zone du fond d’œil. Ce prétraitement est optionnel (`preprocess=True/False` dans `build_feature_matrix`) et nous avons montré qu’il apporte un gain net d’AUC (~0,60 → ~0,70 sur la baseline).
+- **Sélection de features** : après extraction des 548 features “full”, nous appliquons un `FeatureSelector` (seuil de variance + sélection par information mutuelle, top 150) pour réduire la dimension et limiter le surajustement. Le compromis observé est une légère baisse d’AUC (0,74 → 0,72) pour un vecteur plus compact (150 features).
+
+### Gestion du déséquilibre et modèles
+
+- **SMOTE** : sur-échantillonnage synthétique de la classe minoritaire (RG) pour équilibrer les effectifs avant entraînement. Utilisé dans les pipelines imblearn (resampler → scaler → classifieur) et dans les comparaisons du notebook 05. L’impact sur la sensibilité à haute spécificité est variable selon les jeux ; il reste un levier standard pour les problèmes déséquilibrés.
+- **Poids des classes** : utilisation de `class_weight='balanced'` (RF, régression logistique) et de `scale_pos_weight` pour XGBoost lorsque pertinent, pour tenir compte du déséquilibre sans nécessairement dupliquer les exemples.
+- **Seuils de décision** : au lieu de garder le seuil 0,5 par défaut, nous calculons un seuil optimal pour atteindre une **spécificité cible** (ex. 95 %) sur l’ensemble d’entraînement (`find_threshold_for_specificity`), puis nous l’appliquons aux prédictions sur le test. Les métriques “sensibilité @ 95 % spécificité” et “sensibilité @ 90 % spécificité” sont ainsi alignées avec les objectifs du challenge AIROGS.
+
+### Tuning et ensembles
+
+- **Hyperparameter tuning** : `RandomizedSearchCV` sur XGBoost (50 itérations, CV 5-fold, scoring AUC-ROC) pour chercher de bons hyperparamètres (profondeur, learning rate, régularisation, etc.). Les meilleurs paramètres trouvés sont réutilisés dans le pipeline final.
+- **Stacking** : combinaison de XGBoost tuné et de Random Forest avec un métaclassifieur (régression logistique). Dans nos runs, le stacking n’a pas dépassé le XGBoost seul, mais il reste une piste documentée et reproductible pour des expériences ultérieures.
+
+### Métriques et évaluation
+
+- **Métriques AIROGS** : implémentation de l’AUC-ROC, du pAUC (90–100 % spécificité via `roc_auc_score(..., max_fpr=...)`), de la sensibilité à 95 % et 90 % de spécificité, et d’un tableau récapitulatif (`print_metrics`, `compute_all_metrics`).
+- **Intervalles de confiance** : bootstrap sur les métriques pour fournir des IC 95 % (`compute_all_metrics_with_ci`), utiles pour interpréter la variabilité des performances sur des jeux de taille modérée.
+- **Courbes ROC comparatives** : fonction `plot_roc_comparison` pour superposer les courbes ROC de plusieurs configurations (baseline vs pipeline optimisé) et visualiser l’amélioration.
+
+### Organisation du code et périmètre
+
+- **Périmètre ML strict** : documentation claire (PLAN_PROJET.md, SCOPE_ML.md, règle Cursor) pour rappeler que la phase actuelle n’utilise aucun deep learning. Toute idée de recourir à des CNN ou ViT est reportée à une phase ultérieure.
+- **Plan de refactorisation** : nous avons défini un plan détaillé (étapes 1–7) pour clarifier les rôles des notebooks (EDA, baseline, labo features, pipeline complet), alléger les cellules longues, centraliser le chargement et le sous-échantillonnage dans `src/data_loading.py`, et factoriser les métriques et pipelines dans `src/`. L’objectif est d’avoir un “chemin de run” clair pour une démo de A à Z et d’éviter les duplications de logique.
+
+Ces choix permettent de **pousser le ML classique** au maximum (features riches, prétraitement, tuning, ensembles, métriques ciblées) tout en restant dans un cadre reproductible et présentable, et en préparant une baseline solide pour une future phase deep learning.
+
+---
+
+## Synthèse globale et positionnement du travail
+
+### Objectif atteint
+
+Nous avons construit un pipeline complet de machine learning classique pour la détection du glaucome référable :
+
+- Clarification du périmètre (ML classique uniquement, pas de deep learning).
+- Structuration du code en modules (`src/`) et notebooks thématiques (EDA, baseline, labo de features, pipeline complet).
+- Prise en compte du déséquilibre de classe et des contraintes de calcul.
+- Mise en place de métriques adaptées au contexte AIROGS : AUC, pAUC, sensibilité @95 % spécificité, intervalles de confiance par bootstrap.
+
+### Enseignements principaux
+
+1. **Déséquilibre fort** : avec ~3 % de RG, une attention particulière au choix de la métrique et du seuil est indispensable. Une AUC correcte n’implique pas une bonne sensibilité à haute spécificité.
+2. **Prétraitement ophtalmologique** : des opérations simples comme CLAHE + masque circulaire améliorent nettement la qualité des features et l’AUC.
+3. **Features classiques riches** : combiner plusieurs familles de features (couleur, texture, Gabor, spatial) permet d’atteindre des AUC autour de 0,74 en validation, ce qui est honorable pour du ML classique.
+4. **Tuning de modèle** : XGBoost tuné pousse légèrement plus haut la performance que le RF brut, mais la marge de progression reste limitée par la représentation et le bruit des données.
+5. **Limites actuelles** : malgré ces techniques, la sensibilité obtenue à 95 % de spécificité reste trop faible pour une application clinique directe. Le modèle est plus adapté comme outil de triage préliminaire ou comme baseline structurée.
+
+### Rôle pour la suite du projet (deep learning)
+
+Même si le deep learning est explicitement hors périmètre de cette phase, ce travail fournit :
+
+- Une **baseline classique solide** (dataset, splits, métriques) pour comparer les futurs modèles CNN/ViT.
+- Une **intuition claire** de ce que l’on peut atteindre avec des features classiques et de où se situent les limites.
+- Des outils d’évaluation (pAUC, sens@95 %, IC) réutilisables tels quels pour juger des progrès apportés par le deep learning.
+
+En résumé, ce projet montre qu’un pipeline de machine learning classique bien conçu, avec un gros travail sur le prétraitement et les features, permet déjà de capter un signal non négligeable de glaucome référable à partir d’images de fond d’œil, tout en restant interprétable et reproductible. Les performances obtenues servent de base de comparaison et de point de départ pour une future phase de deep learning visant à rapprocher davantage le modèle des exigences de la pratique clinique.
+

@@ -1,0 +1,59 @@
+# Python
+__pycache__/
+*.pyc
+*.pyo
+*.egg-info/
+dist/
+build/
+
+# Virtual environment
+.venv/
+venv/
+env/
+
+# IDE
+.cursor/
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Data (trop volumineux pour git)
+0/
+1/
+2/
+3/
+4/
+5/
+train_labels.csv
+data/train_ml_subset.csv
+data/features_cache/
+
+# Modèles entraînés
+models/*.joblib
+models/*.pkl
+
+# Jupyter
+.ipynb_checkpoints/
+
+# Divers
+.inventaire_manifest.txt
+.venv/
+__pycache__/
+*.pyc
+data/features_cache/
+0/
+1/
+2/
+3/
+4/
+5/
+*.pth
+models/*.pth
+reports/*.json
+.env
+.DS_Store

@@ -1,0 +1,24 @@
+# Architecture recommandée pour le glaucome (fond d'œil) : EfficientNet-B0
+# Bon compromis précision / vitesse, performant en benchmark (AIROGS, REFUGE).
+model:
+  backbone: efficientnet_b0
+  pretrained: true
+  freeze_backbone: false
+
+data:
+  image_size: 224
+
+train:
+  batch_size: 32
+  num_workers: 4
+  num_epochs: 30
+  lr: 1.0e-4
+  weight_decay: 1.0e-4
+  pos_weight: 29.0
+  patience: 5
+
+# Calibration des probabilités (temperature scaling) sur le set de validation
+# après entraînement ; appliquée automatiquement en éval et à la sauvegarde.
+calibration:
+  enabled: true
+
