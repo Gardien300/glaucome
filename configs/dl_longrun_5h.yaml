@@ -1,0 +1,33 @@
+# Config long run ~5h — H100 80GB. Maximiser les perfs sur entraînement prolongé.
+# ~300 epochs × ~1 min/epoch ≈ 5h
+
+model:
+  backbone: efficientnet_v2_m
+  pretrained: true
+  freeze_backbone: false
+
+data:
+  image_size: 384
+
+train:
+  batch_size: 128
+  num_workers: 16
+  persistent_workers: true
+  prefetch_factor: 4
+  num_epochs: 300
+  lr: 4.0e-4
+  weight_decay: 1.0e-4
+  pos_weight: "auto"
+  patience: 25
+  save_interval_epochs: 10
+  warmup_epochs: 10
+  grad_clip_norm: 1.0
+  amp: true
+  compile: true
+  scheduler:
+    type: cosine
+    T_max: 300
+    eta_min: 1.0e-6
+
+calibration:
+  enabled: true

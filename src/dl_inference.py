@@ -17,13 +17,13 @@ from PIL import Image
 from scipy.special import expit as sigmoid
 from torchvision import transforms
 
-from .config import PROJECT_ROOT
+from .config import PROJECT_ROOT, MODELS_DIR
 from .dl_models import build_model
 from .xai import GradCAM, overlay_heatmap_on_image
 
 
 def _get_default_checkpoint_path() -> Path:
-    models_dir = PROJECT_ROOT / "models"
+    models_dir = MODELS_DIR
     # Par défaut, on suppose le modèle produit efficientnet_v2_m
     candidate = models_dir / "dl_efficientnet_v2_m_best.pth"
     if not candidate.exists():

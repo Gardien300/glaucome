@@ -21,6 +21,7 @@ BackboneName = Literal[
     "efficientnet_b4",
     "efficientnet_v2_s",
     "efficientnet_v2_m",
+    "efficientnet_v2_l",
     "convnext_tiny",
     "convnext_small",
     "vit_b_16",
@@ -95,6 +96,14 @@ def get_backbone(
     if name == "efficientnet_v2_m":
         model = models.efficientnet_v2_m(
             weights=models.EfficientNet_V2_M_Weights.IMAGENET1K_V1 if pretrained else None
+        )
+        num_f = model.classifier[1].in_features
+        model.classifier[1] = _replace_classification_head(model, num_f)
+        return model
+
+    if name == "efficientnet_v2_l":
+        model = models.efficientnet_v2_l(
+            weights=models.EfficientNet_V2_L_Weights.IMAGENET1K_V1 if pretrained else None
         )
         num_f = model.classifier[1].in_features
         model.classifier[1] = _replace_classification_head(model, num_f)

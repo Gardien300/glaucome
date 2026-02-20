@@ -121,7 +121,178 @@ Pour chaque rétinographe, on documente :
 
 ---
 
-### 2. Autres rétinographes (à compléter)
+### 2. Topcon NW500
+
+#### 2.1. Description générale
+
+- **Nom complet** : Topcon NW500
+- **Type d’appareil** : Rétinographe non-mydriatique robotisé
+- **Génération** : Récente (≈ 2024+)
+- **Lieu / centre** : _(à compléter)_
+- **Positionnement clinique** : Screening rapide, flux élevé, délégable à orthoptiste/infirmier·e.
+
+#### 2.2. Modalités de photographie fundus
+
+- **Types de photographie** :
+  - Couleur vraie (true color) pour fundus 2D
+  - Vue stéréo / périphérie possible selon protocole
+- **Technologie d’acquisition** :
+  - Slit-Scan + Rolling Shutter (optimisée petites pupilles et lumière ambiante)
+  - Conçue pour réduire flare et ombres
+
+#### 2.3. Champ et résolution
+
+- **Champ visuel** : 50°
+- **Résolution capteur** : 12 MP
+- **Résolution sur fundus** :
+  - Centre ≥ 60 lp/mm
+- **Taille d’image (pixels)** : _(à préciser si connue)_
+
+#### 2.4. Conditions d’acquisition
+
+- **Diamètre pupillaire minimal** :
+  - ≥ 2.0 mm (optimisé petites pupilles)
+- **Mode de capture** :
+  - Full robotic, 1-touch (alignement + focus automatiques)
+  - Bilatéral 2 champs en ≈ 30 secondes
+- **Conditions lumineuses** :
+  - Utilisable en lumière ambiante
+- **Impact clinique** :
+  - Très adapté pour dépistage de masse / consultations chargées.
+
+#### 2.5. Formats, export et métadonnées
+
+- **Logiciel de gestion** : `IMAGEnet6`
+- **Formats d’export image fundus** :
+  - JPEG / TIFF haute résolution (via IMAGEnet6)
+- **Métadonnées** :
+  - Standard IMAGEnet6 (identifiants patient/examen, œil, date, etc.)
+  - _(à compléter si présence de tags additionnels spécifiques NW500)_
+
+#### 2.6. Compatibilité avec nos algorithmes
+
+- **Couleur / dynamique** :
+  - True color 12 MP → **très compatible** avec nos modèles CNN (entrée RGB).
+  - Lumière ambiante possible → variabilité de luminosité à gérer par prétraitement.
+- **Champ de vision (50°)** :
+  - Proche standard 45–50° → **intégrable** dans nos pipelines actuels.
+- **Résolution (12 MP, ≥60 lp/mm)** :
+  - Résolution élevée → marge confortable pour downsampling (512–1024 px) sans perte de détails glaucomateux.
+- **Technologie Slit-Scan / Rolling Shutter** :
+  - Réduction des artefacts (flare, ombres) → a priori **bénéfique** pour stabilité du modèle.
+  - Mais profil d’intensité potentiellement différent des caméras « classiques » → risque de **domain shift léger**.
+
+##### Conclusion compatibilité (résumé)
+
+- **Compatibilité globale** : ✅ **Très compatible** pour nos modèles fundus couleur.
+- **Prétraitements recommandés** :
+  - Normalisation de la taille (resize) et de la luminance (CLAHE / normalisation gamma à tester).
+  - Vérifier l’impact de la lumière ambiante sur le contraste (éventuel rehaussement local).
+- **Spécificités vs autres appareils** :
+  - Petites pupilles et lumière ambiante → distribution d’illumination différente, à prendre en compte dans les splits de validation.
+
+#### 2.7. Risques / points d’attention
+
+- **Variabilité illumination** :
+  - Lumière ambiante → fluctuations d’éclairage entre centres / salles.
+- **Domain shift vs caméras à flash classique** :
+  - Couleurs et contraste peuvent différer de bases historiques (TRC-50DX, Maestro2…).
+
+#### 2.8. Actions à prévoir
+
+- **Court terme** :
+  - [ ] Récupérer un batch pilote NW500 (ex. 100–200 images) pour analyse statistique (histogrammes, couleurs, sharpness).
+  - [ ] Tester l’inférence de nos modèles actuels sur ce batch, sans ré-entraînement.
+- **Moyen terme** :
+  - [ ] Si écart de perf significatif → prévoir fine-tuning/domain adaptation spécifique NW500.
+  - [ ] Documenter le pipeline d’export IMAGEnet6 → dataset (scripts, naming).
+
+---
+
+### 3. Topcon TRC-50DX
+
+#### 3.1. Description générale
+
+- **Nom complet** : Topcon TRC-50DX
+- **Type d’appareil** : Rétinographe (principalement non-mydriatique, génération plus ancienne)
+- **Génération** : Plus ancienne que NW500 (≈ TRC-NW400 / CCD standard)
+- **Lieu / centre** : _(à compléter)_
+- **Positionnement clinique** : Appareil de référence historique pour imagerie fundus couleur.
+
+#### 3.2. Modalités de photographie fundus
+
+- **Types de photographie** :
+  - Fundus couleur standard (flash xenon + CCD)
+  - Autres modalités possibles selon configuration (red-free, etc.) _(à préciser)_
+- **Technologie d’acquisition** :
+  - Flash conventionnel
+  - CCD standard
+
+#### 3.3. Champ et résolution
+
+- **Champ visuel** : 50°
+- **Résolution capteur** :
+  - Inférieure au NW500 (pas de 12 MP spécifié, CCD standard)
+- **Résolution sur fundus** :
+  - Non spécifiée, mais historiquement suffisante pour interprétation clinique.
+
+#### 3.4. Conditions d’acquisition
+
+- **Diamètre pupillaire typique** :
+  - ≥ 2.5–3.0 mm (plus sensible au myosis que NW500)
+- **Mode de capture** :
+  - Semi-automatique
+  - Plus lent et opérateur-dépendant vs robotisé NW500
+- **Conditions lumineuses** :
+  - Environnement plus contrôlé / obscurci généralement recommandé.
+
+#### 3.5. Formats, export et métadonnées
+
+- **Formats d’export** :
+  - Fundus couleur classiques (souvent JPEG ou TIFF, selon setup)
+- **Métadonnées** :
+  - Standard (identifiants, œil, date, etc.) — à documenter précisément selon le centre.
+
+#### 3.6. Compatibilité avec nos algorithmes
+
+- **Couleur / dynamique** :
+  - Imagerie couleur « traditionnelle » (flash xenon) → **proche** de nombreuses bases publiques et cliniques historiques.
+  - A priori **très compatible** avec les modèles CNN pré-entraînés sur fundus classiques.
+- **Champ de vision (50°)** :
+  - Aligné avec NW500 → facilite mélange de données si les prétraitements sont bien normalisés.
+- **Résolution** :
+  - Inférieure au NW500 mais suffisante pour usage clinique → a priori **suffisante** pour nos modèles, sous réserve de qualité d’acquisition.
+- **Comparaison NW500 vs TRC-50DX** :
+  - TRC-50DX plus sensible au myosis et aux conditions de lumière → risque d’images plus bruitées / sous-exposées.
+
+##### Conclusion compatibilité (résumé)
+
+- **Compatibilité globale** : ✅ **Compatible** avec nos modèles CNN actuels (fondus couleur standard).
+- **Prétraitements recommandés** :
+  - Normalisation couleur et contraste (surtout pour images sous/sur-exposées).
+  - Vérifier homogénéité de résolution si mélange avec NW500 dans un même dataset.
+- **Rôle dans le projet** :
+  - Bon candidat comme « caméra de référence historique » pour entraîner ou valider les modèles sur des conditions plus classiques.
+
+#### 3.7. Risques / points d’attention
+
+- **Variabilité opérateur** :
+  - Semi-manuelle → grande hétérogénéité de centrage, focus et exposition.
+- **Sensibilité à la pupille et lumière** :
+  - Myosis et mauvaise obscurité → risque de qualité dégradée, nécessitant filtrage qualité avant entraînement.
+
+#### 3.8. Actions à prévoir
+
+- **Court terme** :
+  - [ ] Collecter un échantillon d’images TRC-50DX issues de la pratique réelle (qualité variable).
+  - [ ] Mettre en place un score qualité automatique (flou, centrage, exposition) pour filtrer les pires images avant entraînement.
+- **Moyen terme** :
+  - [ ] Étudier performances comparées NW500 vs TRC-50DX (AUC, sensibilité, spécificité par appareil).
+  - [ ] Envisager des augmentations spécifiques (blur, variations d’exposition) pour mieux couvrir la variabilité TRC-50DX.
+
+---
+
+### 4. Autres rétinographes (à compléter)
 
 Pour chaque nouvel appareil, copier/coller la structure ci-dessus et adapter :
 

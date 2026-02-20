@@ -18,6 +18,7 @@ train:
   weight_decay: 1.0e-4
   pos_weight: "auto"
   patience: 7
+  save_interval_epochs: 5  # sauvegarde périodique de secours (RunPod / manque crédits)
   scheduler:
     type: cosine
     T_max: 40

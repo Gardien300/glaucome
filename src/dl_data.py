@@ -111,8 +111,12 @@ def build_dl_splits() -> Tuple[pd.DataFrame, pd.DataFrame, pd.DataFrame, pd.Data
 
     print(f"  Train DL: {len(train_df)} | Val DL: {len(val_df)}")
 
-    print("  Loading eval (EVAL_FOLDERS)...")
-    eval_df = get_multi_folder_df(EVAL_FOLDERS)
+    if EVAL_FOLDERS:
+        print("  Loading eval (EVAL_FOLDERS)...")
+        eval_df = get_multi_folder_df(EVAL_FOLDERS)
+    else:
+        print("  Eval = Val (EVAL_FOLDERS vide, train max sur 0+1+2+3+4)")
+        eval_df = val_df.copy()
 
     print("  Loading holdout (HOLDOUT_FOLDER)...")
     holdout_df = get_subset_for_folder(HOLDOUT_FOLDER)
@@ -132,6 +136,8 @@ def create_dataloaders(
     batch_size: int = 32,
     num_workers: int = 4,
     pin_memory: bool = True,
+    persistent_workers: bool = False,
+    prefetch_factor: Optional[int] = None,
 ) -> Dict[str, DataLoader]:
     """
     Create DataLoader objects for the different splits.
@@ -150,45 +156,32 @@ def create_dataloaders(
     if eval_transforms is None:
         eval_transforms = train_transforms
 
+    loader_kw = {
+        "batch_size": batch_size,
+        "num_workers": num_workers,
+        "pin_memory": pin_memory,
+    }
+    if num_workers > 0:
+        if persistent_workers:
+            loader_kw["persistent_workers"] = True
+        if prefetch_factor is not None:
+            loader_kw["prefetch_factor"] = prefetch_factor
+
     loaders: Dict[str, DataLoader] = {}
 
     train_ds = FundusDataset(train_df, transforms=train_transforms)
     val_ds = FundusDataset(val_df, transforms=eval_transforms)
 
-    loaders["train"] = DataLoader(
-        train_ds,
-        batch_size=batch_size,
-        shuffle=True,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
-    loaders["val"] = DataLoader(
-        val_ds,
-        batch_size=batch_size,
-        shuffle=False,
-        num_workers=num_workers,
-        pin_memory=pin_memory,
-    )
+    loaders["train"] = DataLoader(train_ds, shuffle=True, **loader_kw)
+    loaders["val"] = DataLoader(val_ds, shuffle=False, **loader_kw)
 
     if eval_df is not None:
         eval_ds = FundusDataset(eval_df, transforms=eval_transforms)
-        loaders["eval"] = DataLoader(
-            eval_ds,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        )
+        loaders["eval"] = DataLoader(eval_ds, shuffle=False, **loader_kw)
 
     if holdout_df is not None:
         holdout_ds = FundusDataset(holdout_df, transforms=eval_transforms)
-        loaders["holdout"] = DataLoader(
-            holdout_ds,
-            batch_size=batch_size,
-            shuffle=False,
-            num_workers=num_workers,
-            pin_memory=pin_memory,
-        )
+        loaders["holdout"] = DataLoader(holdout_ds, shuffle=False, **loader_kw)
 
     return loaders
 
