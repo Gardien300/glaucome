@@ -21,10 +21,15 @@ DATA_DIR = PROJECT_ROOT  # dossiers 0, 1, 2, 3, 4, 5 sont à la racine
 ML_IMAGE_FOLDER = "0"
 ML_IMAGES_PATH = DATA_DIR / ML_IMAGE_FOLDER
 
-# Multi-dossier : entraînement au max sur 0+1+2+3+4 (~90k), holdout strict sur 5
+# Stratégie de split DL : "random" (merge 0-5 + split stratifié) ou "folders" (par dossier)
+SPLIT_STRATEGY = "random"
+RANDOM_SPLIT_RATIOS = (0.70, 0.15, 0.15)  # train, val, holdout (évite biais machine unique dossier 5)
+
+# Multi-dossier (utilisé si SPLIT_STRATEGY == "folders")
 TRAIN_FOLDERS = ["0", "1", "2", "3", "4"]
-EVAL_FOLDERS = []  # eval = val split (15 % de train_full) ; holdout 5 jamais vu
+EVAL_FOLDERS = []
 HOLDOUT_FOLDER = "5"
+ALL_DL_FOLDERS = ["0", "1", "2", "3", "4", "5"]
 
 # Fichiers dérivés (créés par les scripts)
 TRAIN_ML_SUBSET_CSV = PROJECT_ROOT / "data" / "train_ml_subset.csv"

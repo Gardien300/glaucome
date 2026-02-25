@@ -215,7 +215,6 @@ def plot_confusion_matrix(
         title=title,
     )
 
-    # Annoter les cellules
     thresh = cm.max() / 2.0
     for i in range(2):
         for j in range(2):
@@ -229,3 +228,114 @@ def plot_confusion_matrix(
         fig.savefig(save_path, dpi=150, bbox_inches="tight")
 
     return fig
+
+
+# ---------------------------------------------------------------------------
+# Calibration metrics (Bloc F)
+# ---------------------------------------------------------------------------
+
+def expected_calibration_error(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    n_bins: int = 15,
+) -> float:
+    """
+    Expected Calibration Error.
+    ECE = sum_m (|B_m| / n) * |acc(B_m) - conf(B_m)|
+    """
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    ece = 0.0
+    n = len(y_true)
+    if n == 0:
+        return 0.0
+
+    for i in range(n_bins):
+        mask = (y_prob > bin_edges[i]) & (y_prob <= bin_edges[i + 1])
+        if mask.sum() == 0:
+            continue
+        bin_acc = float(y_true[mask].mean())
+        bin_conf = float(y_prob[mask].mean())
+        bin_size = int(mask.sum())
+        ece += (bin_size / n) * abs(bin_acc - bin_conf)
+
+    return float(ece)
+
+
+def brier_score(y_true: np.ndarray, y_prob: np.ndarray) -> float:
+    """Brier score: BS = mean((p_i - y_i)^2)."""
+    return float(np.mean((y_prob - y_true) ** 2))
+
+
+def plot_reliability_diagram(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    n_bins: int = 15,
+    save_path: str = None,
+    title: str = "Diagramme de fiabilité (calibration)",
+):
+    """Reliability diagram with histogram of predictions."""
+    bin_edges = np.linspace(0, 1, n_bins + 1)
+    bin_centers = []
+    bin_accs = []
+    bin_sizes = []
+
+    for i in range(n_bins):
+        mask = (y_prob > bin_edges[i]) & (y_prob <= bin_edges[i + 1])
+        if mask.sum() == 0:
+            continue
+        bin_centers.append((bin_edges[i] + bin_edges[i + 1]) / 2)
+        bin_accs.append(float(y_true[mask].mean()))
+        bin_sizes.append(int(mask.sum()))
+
+    fig, (ax1, ax2) = plt.subplots(
+        2, 1, figsize=(8, 8), gridspec_kw={"height_ratios": [3, 1]}
+    )
+
+    ax1.plot([0, 1], [0, 1], "k--", lw=1.5, label="Calibration parfaite")
+    ax1.bar(
+        bin_centers, bin_accs, width=1 / n_bins, alpha=0.6,
+        edgecolor="black", label="Modèle"
+    )
+    ax1.set_ylabel("Fraction de positifs (accuracy)")
+    ax1.set_xlim([0, 1])
+    ax1.set_ylim([0, 1.05])
+    ax1.set_title(title)
+    ax1.legend()
+    ax1.grid(True, alpha=0.3)
+
+    ax2.bar(bin_centers, bin_sizes, width=1 / n_bins, alpha=0.6, color="gray")
+    ax2.set_xlabel("Confiance prédite")
+    ax2.set_ylabel("Nb prédictions")
+    ax2.set_xlim([0, 1])
+
+    plt.tight_layout()
+    if save_path:
+        fig.savefig(save_path, dpi=150, bbox_inches="tight")
+        print(f"  Reliability diagram sauvegardé: {save_path}")
+        plt.close(fig)
+
+    return fig
+
+
+# ---------------------------------------------------------------------------
+# Per-device metrics (Bloc G)
+# ---------------------------------------------------------------------------
+
+def compute_metrics_by_device(
+    y_true: np.ndarray,
+    y_prob: np.ndarray,
+    device_ids: np.ndarray,
+) -> dict:
+    """
+    Calcule les métriques AIROGS par device_id.
+    Retourne {device: {metric: value, ...}, ...}.
+    """
+    results = {}
+    for device in np.unique(device_ids):
+        mask = device_ids == device
+        if mask.sum() < 10 or len(np.unique(y_true[mask])) < 2:
+            continue
+        metrics = compute_all_metrics(y_true[mask], y_prob[mask])
+        metrics["n_samples"] = int(mask.sum())
+        results[str(device)] = metrics
+    return results

@@ -1,4 +1,5 @@
-# Config optimisée H100 80GB HBM3 — toutes améliorations activées.
+# Config optimisée H100 80GB HBM3 — pousser à fond, pas de temps perdu.
+# Machine: 80 GB VRAM, ~233 GB RAM. Tout au max.
 
 model:
   backbone: efficientnet_v2_m
@@ -19,10 +20,6 @@ train:
   pos_weight: "auto"
   patience: 7
   save_interval_epochs: 5
-  augmentation_level: strong
-  label_smoothing: 0.05
-  loss: bce
-  grad_clip_norm: 1.0
   amp: true
   compile: true
   scheduler:

@@ -2,14 +2,15 @@
 High-level inference helpers for the deep learning glaucoma model.
 
 Provides:
-- load_model_and_metadata: charge le checkpoint DL (state_dict + T + backbone + image_size)
-- predict_with_explanations: prend une image PIL, renvoie proba RG, label texte, overlay Grad-CAM.
+- load_model_and_metadata: charge le checkpoint DL.
+- predict_with_explanations: prédiction + Grad-CAM.
+- predict_with_tta: Test-Time Augmentation pour des prédictions robustes.
 """
 
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Dict, Tuple
+from typing import Dict, List, Tuple
 
 import numpy as np
 import torch
@@ -17,15 +18,14 @@ from PIL import Image
 from scipy.special import expit as sigmoid
 from torchvision import transforms
 
-from .config import PROJECT_ROOT, MODELS_DIR
+from .config import MODELS_DIR
+from .dl_data import normalize_fundus
 from .dl_models import build_model
 from .xai import GradCAM, overlay_heatmap_on_image
 
 
 def _get_default_checkpoint_path() -> Path:
-    models_dir = MODELS_DIR
-    # Par défaut, on suppose le modèle produit efficientnet_v2_m
-    candidate = models_dir / "dl_efficientnet_v2_m_best.pth"
+    candidate = MODELS_DIR / "dl_efficientnet_v2_m_best.pth"
     if not candidate.exists():
         raise FileNotFoundError(
             f"Checkpoint {candidate} introuvable. "
@@ -38,13 +38,7 @@ def load_model_and_metadata(
     checkpoint_path: Path | None = None,
     device: torch.device | None = None,
 ) -> Tuple[torch.nn.Module, float, Dict]:
-    """
-    Charge un modèle DL entraîné + température de calibration + métadonnées.
-
-    Args:
-        checkpoint_path: chemin du .pth sauvegardé par src.dl_train.
-        device: device torch (cpu/cuda). Si None, déduit automatiquement.
-    """
+    """Charge un modèle DL entraîné + température de calibration + métadonnées."""
     if checkpoint_path is None:
         checkpoint_path = _get_default_checkpoint_path()
 
@@ -56,8 +50,16 @@ def load_model_and_metadata(
     temperature = float(ckpt.get("temperature", 1.0))
     image_size = int(ckpt.get("image_size", 384))
 
+    state_dict = ckpt["state_dict"]
+    if any(k.startswith("_orig_mod.") for k in state_dict.keys()):
+        prefix = "_orig_mod."
+        state_dict = {
+            (k[len(prefix):] if k.startswith(prefix) else k): v
+            for k, v in state_dict.items()
+        }
+
     model = build_model(backbone=backbone, pretrained=False)
-    model.load_state_dict(ckpt["state_dict"])
+    model.load_state_dict(state_dict)
     model.to(device)
     model.eval()
 
@@ -70,72 +72,125 @@ def load_model_and_metadata(
 
 
 def _build_transform(image_size: int) -> transforms.Compose:
-    return transforms.Compose(
-        [
-            transforms.Resize((image_size, image_size)),
+    return transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+
+# ---------------------------------------------------------------------------
+# TTA (Bloc E)
+# ---------------------------------------------------------------------------
+
+def _build_tta_transforms(image_size: int) -> List[transforms.Compose]:
+    """Build a set of transforms for Test-Time Augmentation."""
+    norm = transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225])
+    base_resize = transforms.Resize((image_size, image_size))
+
+    return [
+        transforms.Compose([base_resize, transforms.ToTensor(), norm]),
+        transforms.Compose([base_resize, transforms.RandomHorizontalFlip(p=1.0), transforms.ToTensor(), norm]),
+        transforms.Compose([base_resize, transforms.RandomVerticalFlip(p=1.0), transforms.ToTensor(), norm]),
+        transforms.Compose([
+            base_resize,
+            transforms.RandomRotation(degrees=(90, 90)),
             transforms.ToTensor(),
-            transforms.Normalize(
-                mean=[0.485, 0.456, 0.406],
-                std=[0.229, 0.224, 0.225],
-            ),
-        ]
-    )
+            norm,
+        ]),
+        transforms.Compose([
+            base_resize,
+            transforms.RandomRotation(degrees=(270, 270)),
+            transforms.ToTensor(),
+            norm,
+        ]),
+    ]
 
 
-def preprocess_fundus_for_inference(
+def predict_with_tta(
+    model: torch.nn.Module,
     pil_image: Image.Image,
     image_size: int,
-    device_id: str | None = None,
-) -> Tuple[Image.Image, np.ndarray]:
+    temperature: float = 1.0,
+    device: torch.device | None = None,
+) -> float:
     """
-    Prétraitement léger pour rapprocher l'image du domaine d'entraînement.
-
-    Étapes :
-    - conversion en RGB
-    - crop centré carré (si nécessaire)
-    - correction de contraste douce (CLAHE sur la luminance)
-    - resize à image_size
-
-    Args:
-        pil_image: image brute fournie par le praticien.
-        image_size: taille cible (côté) du modèle DL.
-        device_id: identifiant optionnel du rétinographe (réservé pour ajustements futurs).
-
-    Returns:
-        preprocessed_pil: image PIL prête pour la transform torchvision.
-        np_image_rgb: version numpy RGB (avant normalisation) pour XAI.
+    TTA: average logits across multiple augmented views, then apply sigmoid.
+    Returns calibrated probability.
     """
-    import cv2  # type: ignore[import]
+    if device is None:
+        device = next(model.parameters()).device
 
-    img = pil_image.convert("RGB")
+    processed = normalize_fundus(pil_image)
+    tta_tfs = _build_tta_transforms(image_size)
 
-    # Crop centré carré (pour limiter les formes trop exotiques)
-    w, h = img.size
-    min_side = min(w, h)
-    left = (w - min_side) // 2
-    top = (h - min_side) // 2
-    img = img.crop((left, top, left + min_side, top + min_side))
+    logits_list = []
+    model.eval()
+    with torch.no_grad():
+        for tf in tta_tfs:
+            tensor = tf(processed).unsqueeze(0).to(device)
+            logits = model(tensor).squeeze().cpu().item()
+            logits_list.append(logits)
 
-    # Correction de contraste douce via CLAHE sur la luminance (espace LAB)
-    np_img = np.array(img)
-    lab = cv2.cvtColor(np_img, cv2.COLOR_RGB2LAB)
-    l, a, b = cv2.split(lab)
-    clahe = cv2.createCLAHE(clipLimit=2.0, tileGridSize=(8, 8))
-    l_eq = clahe.apply(l)
-    lab_eq = cv2.merge((l_eq, a, b))
-    rgb_eq = cv2.cvtColor(lab_eq, cv2.COLOR_LAB2RGB)
+    avg_logit = float(np.mean(logits_list))
+    return float(sigmoid(avg_logit / temperature))
 
-    # Resize final à image_size × image_size
-    rgb_eq_pil = Image.fromarray(rgb_eq)
-    rgb_eq_pil = rgb_eq_pil.resize((image_size, image_size), Image.BILINEAR)
 
-    return rgb_eq_pil, np.array(rgb_eq_pil)
+def evaluate_with_tta(
+    model: torch.nn.Module,
+    loader,
+    image_size: int,
+    temperature: float = 1.0,
+    device: torch.device | None = None,
+) -> Tuple[np.ndarray, np.ndarray]:
+    """
+    Run TTA evaluation on a full DataLoader.
+    Returns (y_prob, y_true).
+    Note: slower than standard eval — intended for final holdout assessment.
+    """
+    if device is None:
+        device = next(model.parameters()).device
 
+    tta_tfs = _build_tta_transforms(image_size)
+    norm_tf = transforms.Compose([
+        transforms.Resize((image_size, image_size)),
+        transforms.ToTensor(),
+        transforms.Normalize(mean=[0.485, 0.456, 0.406], std=[0.229, 0.224, 0.225]),
+    ])
+
+    all_probs = []
+    all_labels = []
+
+    model.eval()
+    ds = loader.dataset
+    with torch.no_grad():
+        for idx in range(len(ds)):
+            row = ds.df.iloc[idx]
+            label = 1 if row["class"] == "RG" else 0
+            img_path = ds.root / Path(row["path"])
+            with Image.open(img_path) as img:
+                img = img.convert("RGB")
+            processed = normalize_fundus(img)
+
+            logits_list = []
+            for tf in tta_tfs:
+                tensor = tf(processed).unsqueeze(0).to(device)
+                logit = model(tensor).squeeze().cpu().item()
+                logits_list.append(logit)
+
+            avg_logit = float(np.mean(logits_list))
+            prob = float(sigmoid(avg_logit / temperature))
+            all_probs.append(prob)
+            all_labels.append(label)
+
+    return np.array(all_probs), np.array(all_labels)
+
+
+# ---------------------------------------------------------------------------
+# Inference with XAI
+# ---------------------------------------------------------------------------
 
 def _get_target_layer_for_gradcam(model: torch.nn.Module, backbone: str):
-    """
-    Retourne la couche cible à utiliser pour Grad-CAM selon le backbone.
-    """
     backbone = backbone.lower()
     if backbone.startswith("efficientnet"):
         return model.features[-1]
@@ -143,44 +198,43 @@ def _get_target_layer_for_gradcam(model: torch.nn.Module, backbone: str):
         return model.features[-1]
     if backbone.startswith("resnet"):
         return model.layer4
-    # ViT ou autres: Grad-CAM non supporté dans cette implémentation minimale
     raise ValueError(f"Grad-CAM non supporté pour le backbone '{backbone}'.")
 
 
 def predict_with_explanations(
     pil_image: Image.Image,
     checkpoint_path: Path | None = None,
+    use_tta: bool = False,
 ) -> Tuple[float, str, np.ndarray]:
     """
     Applique le modèle DL + Grad-CAM sur une image PIL.
 
-    Retourne:
+    Returns:
         prob_rg: probabilité prédite (calibrée) que l'image soit RG.
         label_str: texte lisible pour le clinicien.
         overlay: image RGB avec heatmap Grad-CAM superposée (uint8).
     """
     model, temperature, meta = load_model_and_metadata(checkpoint_path=checkpoint_path)
     device = next(model.parameters()).device
-
     image_size = int(meta["image_size"])
-    tf = _build_transform(image_size)
 
-    # Prétraitement léger + copie numpy pour l'overlay XAI
-    preprocessed_pil, np_img = preprocess_fundus_for_inference(
-        pil_image, image_size=image_size, device_id=None
-    )
+    preprocessed_pil = normalize_fundus(pil_image)
+    np_img = np.array(preprocessed_pil.resize((image_size, image_size), Image.BILINEAR))
 
-    input_tensor = tf(preprocessed_pil).unsqueeze(0).to(device)
-
-    # Prédiction
-    with torch.no_grad():
-        logits = model(input_tensor)
-    logits_np = logits.squeeze(1).cpu().numpy()
-    prob_rg = float(sigmoid(logits_np / temperature)[0])
+    if use_tta:
+        prob_rg = predict_with_tta(model, pil_image, image_size, temperature, device)
+    else:
+        tf = _build_transform(image_size)
+        input_tensor = tf(preprocessed_pil).unsqueeze(0).to(device)
+        with torch.no_grad():
+            logits = model(input_tensor)
+        logits_np = logits.squeeze(1).cpu().numpy()
+        prob_rg = float(sigmoid(logits_np / temperature)[0])
 
     label_str = "Glaucome référable (RG)" if prob_rg >= 0.5 else "Non glaucomateux (NRG)"
 
-    # Grad-CAM
+    tf = _build_transform(image_size)
+    input_tensor = tf(preprocessed_pil).unsqueeze(0).to(device)
     backbone = meta["backbone"]
     target_layer = _get_target_layer_for_gradcam(model, backbone=backbone)
     cam = GradCAM(model, target_layer)
@@ -191,4 +245,3 @@ def predict_with_explanations(
         cam.close()
 
     return prob_rg, label_str, overlay
-

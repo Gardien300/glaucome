@@ -1,11 +1,14 @@
-# Config "haute performance" : prix d'entraînement non limitant, objectif perf max.
-# Données actuelles (~46k train) sont suffisantes pour ce type de modèle.
-# À lancer sur GPU (RunPod A40 / 4090 recommandé).
+# Config "haute performance" : objectif perf max.
+# Intègre les améliorations du plan_amelioration_code.md.
 
 model:
   backbone: efficientnet_v2_m
   pretrained: true
   freeze_backbone: false
+  # dual_branch: false          # activer pour architecture double-branche (papille)
+  # papilla_backbone: efficientnet_v2_s
+  # papilla_image_size: 128
+  # papilla_crop_ratio: 0.22
 
 data:
   image_size: 384
@@ -18,7 +21,15 @@ train:
   weight_decay: 1.0e-4
   pos_weight: "auto"
   patience: 7
-  save_interval_epochs: 5  # sauvegarde périodique de secours (RunPod / manque crédits)
+  save_interval_epochs: 5
+  augmentation_level: strong    # light | medium | strong
+  label_smoothing: 0.05
+  loss: bce                     # bce | focal
+  # focal_alpha: 0.75
+  # focal_gamma: 2.0
+  # discriminative_lr: false
+  # lr_decay: 0.3
+  # phase_epochs: [5, 10, 25]   # phased fine-tuning (Bloc D)
   scheduler:
     type: cosine
     T_max: 40

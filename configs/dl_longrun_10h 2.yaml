@@ -1,34 +1,32 @@
-# Config long run ~5h — H100 80GB. Toutes améliorations activées.
+# Config long run ~10h — H100 80GB. Modèle plus grand (L), max capacité.
+# EfficientNetV2-L + 448px : ~2 min/epoch → 250 epochs ≈ 8-10h
 
 model:
-  backbone: efficientnet_v2_m
+  backbone: efficientnet_v2_l
   pretrained: true
   freeze_backbone: false
 
 data:
-  image_size: 384
+  image_size: 448
 
 train:
-  batch_size: 128
+  batch_size: 64
   num_workers: 16
   persistent_workers: true
   prefetch_factor: 4
-  num_epochs: 300
-  lr: 4.0e-4
+  num_epochs: 250
+  lr: 3.0e-4
   weight_decay: 1.0e-4
   pos_weight: "auto"
-  patience: 25
+  patience: 30
   save_interval_epochs: 10
-  warmup_epochs: 10
+  warmup_epochs: 15
   grad_clip_norm: 1.0
-  augmentation_level: strong
-  label_smoothing: 0.05
-  loss: bce
   amp: true
   compile: true
   scheduler:
     type: cosine
-    T_max: 300
+    T_max: 250
     eta_min: 1.0e-6
 
 calibration:

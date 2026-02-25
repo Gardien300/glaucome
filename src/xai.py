@@ -18,7 +18,7 @@ Typical usage (batch size 1):
 
 from __future__ import annotations
 
-from typing import Optional
+from typing import Optional, Tuple
 
 import numpy as np
 import torch
@@ -127,6 +127,61 @@ class GradCAM:
         """Remove hooks to avoid memory leaks."""
         self._forward_hook.remove()
         self._backward_hook.remove()
+
+
+def build_papilla_mask(
+    feat_h: int,
+    feat_w: int,
+    cx_norm: float,
+    cy_norm: float,
+    radius_ratio: float = 0.15,
+) -> torch.Tensor:
+    """
+    Build a circular binary mask in feature-map space around the optic disc.
+
+    Args:
+        feat_h, feat_w: spatial dimensions of the feature map.
+        cx_norm, cy_norm: normalised [0, 1] centre of the optic disc.
+        radius_ratio: radius of the mask as a fraction of the feature map.
+
+    Returns:
+        mask: (feat_h, feat_w) float tensor with 1 inside the disc, 0 outside.
+    """
+    Y, X = torch.meshgrid(
+        torch.linspace(0, 1, feat_h),
+        torch.linspace(0, 1, feat_w),
+        indexing="ij",
+    )
+    dist = torch.sqrt((X - cx_norm) ** 2 + (Y - cy_norm) ** 2)
+    return (dist <= radius_ratio).float()
+
+
+def compute_attention_loss_from_cam(
+    cam: torch.Tensor,
+    papilla_mask: torch.Tensor,
+    labels: torch.Tensor,
+) -> torch.Tensor:
+    """
+    Attention regularisation loss: penalise activations outside the papilla
+    for RG images, encourage activations inside the papilla.
+
+    Args:
+        cam: (B, H_f, W_f) normalised CAM (requires grad).
+        papilla_mask: (B, H_f, W_f) binary mask.
+        labels: (B,) integer labels (1 = RG).
+
+    Returns:
+        Scalar loss (0 if no RG in batch).
+    """
+    rg_mask = (labels == 1).float()
+    if rg_mask.sum() == 0:
+        return torch.tensor(0.0, device=cam.device, requires_grad=True)
+
+    inv_mask = 1.0 - papilla_mask
+    loss_outside = ((cam * inv_mask) ** 2).mean(dim=(1, 2))
+    loss_inside = (((1.0 - cam) * papilla_mask) ** 2).mean(dim=(1, 2))
+    att_loss = (rg_mask * (loss_outside + loss_inside)).sum() / rg_mask.sum().clamp(min=1)
+    return att_loss
 
 
 def overlay_heatmap_on_image(

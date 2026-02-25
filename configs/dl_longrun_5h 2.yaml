@@ -1,4 +1,5 @@
-# Config optimisée H100 80GB HBM3 — toutes améliorations activées.
+# Config long run ~5h — H100 80GB. Maximiser les perfs sur entraînement prolongé.
+# ~300 epochs × ~1 min/epoch ≈ 5h
 
 model:
   backbone: efficientnet_v2_m
@@ -13,21 +14,19 @@ train:
   num_workers: 16
   persistent_workers: true
   prefetch_factor: 4
-  num_epochs: 40
+  num_epochs: 300
   lr: 4.0e-4
   weight_decay: 1.0e-4
   pos_weight: "auto"
-  patience: 7
-  save_interval_epochs: 5
-  augmentation_level: strong
-  label_smoothing: 0.05
-  loss: bce
+  patience: 25
+  save_interval_epochs: 10
+  warmup_epochs: 10
   grad_clip_norm: 1.0
   amp: true
   compile: true
   scheduler:
     type: cosine
-    T_max: 40
+    T_max: 300
     eta_min: 1.0e-6
 
 calibration:

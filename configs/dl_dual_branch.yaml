@@ -1,0 +1,42 @@
+# Config double-branche : global + papille (Bloc B).
+# Détection auto de la papille + crop dédié.
+# Plus lent (~2x) mais meilleur alignement Grad-CAM.
+
+model:
+  backbone: efficientnet_v2_m
+  pretrained: true
+  freeze_backbone: false
+  dual_branch: true
+  papilla_backbone: efficientnet_v2_s
+  papilla_image_size: 128
+  papilla_crop_ratio: 0.22
+  fusion_dim: 512
+
+data:
+  image_size: 384
+
+train:
+  batch_size: 48
+  num_workers: 8
+  persistent_workers: true
+  prefetch_factor: 2
+  num_epochs: 60
+  lr: 3.0e-4
+  weight_decay: 1.0e-4
+  pos_weight: "auto"
+  patience: 12
+  save_interval_epochs: 5
+  warmup_epochs: 5
+  grad_clip_norm: 1.0
+  augmentation_level: strong
+  label_smoothing: 0.05
+  loss: bce
+  amp: true
+  compile: false
+  scheduler:
+    type: cosine
+    T_max: 60
+    eta_min: 1.0e-6
+
+calibration:
+  enabled: true
